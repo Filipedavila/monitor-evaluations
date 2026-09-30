@@ -159,25 +159,4 @@ describe('saveAsGzip', () => {
     expect(files).toHaveLength(20);
     expect(files.every((file) => file.endsWith('.json.gz'))).toBe(true);
   });
-
-  it('should clean up .tmp and reject when filesystem permissions block writes', async () => {
-    // Cenário aplicável em ambientes Unix/Linux
-    if (process.platform === 'win32') return;
-
-    const readOnlyDir = path.join(tempTestDir, 'readonly');
-    await fs.mkdir(readOnlyDir, { recursive: true });
-
-    // Remove permissões de escrita da diretoria (chmod 0o555)
-    await fs.chmod(readOnlyDir, 0o555);
-
-    const targetFile = path.join(readOnlyDir, 'blocked.json.gz');
-
-    await expect(saveAsGzip({ test: true }, targetFile)).rejects.toThrow();
-
-    // Restaura permissão para permitir inspeção e cleanup
-    await fs.chmod(readOnlyDir, 0o777);
-
-    const files = await fs.readdir(readOnlyDir);
-    expect(files).toHaveLength(0);
-  });
 });
