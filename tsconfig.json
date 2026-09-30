@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "noImplicitAny": false,
+    "resolveJsonModule": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "target": "es2022",
+    "strictPropertyInitialization": false,
+    "sourceMap": true,
+    "strict": true,
+    "useDefineForClassFields": false,
+    "outDir": "./dist",
+    "incremental": true,
+    "types": ["jest", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "src/*": ["./src/*"],
+      "@factories/*": ["./test/factories/*"],
+      "@domains/*": ["src/domains/*"],
+      "@common/*": ["./src/common/*"],
+      "@core/*": ["./src/core/*"],
+      "test/*": ["./test/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist"]
+}

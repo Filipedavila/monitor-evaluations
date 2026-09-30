@@ -1,0 +1,21 @@
+Dockerfile
+.dockerignore
+migration-*
+node_modules/
+.idea
+.vscode
+.git
+.gitignore
+dist/
+migration
+coverage/
+storage/
+README.md
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+.env.production
+.env.dev
+.env.prod
