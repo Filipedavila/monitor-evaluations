@@ -39,14 +39,17 @@ export class EvaluationLocalStorageStrategy implements EvaluationStorage {
     await fs.mkdir(this.BASE_PATH, { recursive: true });
   }
 
-  private buildSafePaths(evalIdentifier: EvaluationIdentifier): SafePaths {
+  private buildSafeKeys(evalIdentifier: EvaluationIdentifier): {
+    prefixDir: string;
+    baseFileName: string;
+  } {
     const safeDate = new Date(evalIdentifier.evaluationDate).toISOString().slice(0, 10);
-    const targetDir = join(this.BASE_PATH, safeDate, `${evalIdentifier.websiteId}`);
+    const prefixDir = join(this.BASE_PATH, safeDate, `${evalIdentifier.websiteId}`);
+
     const baseFileName = `${evalIdentifier.pageId}_${evalIdentifier.evaluationId}`;
 
-    return { targetDir, baseFileName };
+    return { prefixDir, baseFileName };
   }
-
   private buildFilePaths(targetDir: string, baseFileName: string): EvaluationFilePaths {
     return {
       htmlPath: join(targetDir, `${baseFileName}${this.HTML_FILE_COMPRESSED_SUFFIX}`),
@@ -101,7 +104,7 @@ export class EvaluationLocalStorageStrategy implements EvaluationStorage {
   }
 
   async save(payload: EvaluationStoragePayload): Promise<void> {
-    const { targetDir, baseFileName } = this.buildSafePaths(payload.evalIdentifier);
+    const { prefixDir: targetDir, baseFileName } = this.buildSafeKeys(payload.evalIdentifier);
     const { htmlPath, nodesPath, hashPath, htmlHashPath } = this.buildFilePaths(
       targetDir,
       baseFileName,
@@ -139,7 +142,7 @@ export class EvaluationLocalStorageStrategy implements EvaluationStorage {
     evaluationIdentifier: EvaluationIdentifier,
     fileType: EvaluationFileType,
   ): Promise<ReadStream> {
-    const { targetDir, baseFileName } = this.buildSafePaths(evaluationIdentifier);
+    const { prefixDir: targetDir, baseFileName } = this.buildSafeKeys(evaluationIdentifier);
     this.validateFileType(fileType);
     const fullPath = this.getFilePathForType(targetDir, baseFileName, fileType);
 
@@ -155,7 +158,7 @@ export class EvaluationLocalStorageStrategy implements EvaluationStorage {
   }
 
   public async exists(evaluationIdentifier: EvaluationIdentifier): Promise<boolean> {
-    const { targetDir, baseFileName } = this.buildSafePaths(evaluationIdentifier);
+    const { prefixDir: targetDir, baseFileName } = this.buildSafeKeys(evaluationIdentifier);
     const { htmlPath, nodesPath } = this.buildFilePaths(targetDir, baseFileName);
 
     try {
@@ -173,7 +176,7 @@ export class EvaluationLocalStorageStrategy implements EvaluationStorage {
   }
 
   async delete(evaluationIdentifier: EvaluationIdentifier): Promise<void> {
-    const { targetDir, baseFileName } = this.buildSafePaths(evaluationIdentifier);
+    const { prefixDir: targetDir, baseFileName } = this.buildSafeKeys(evaluationIdentifier);
     const { htmlPath, nodesPath, hashPath, htmlHashPath } = this.buildFilePaths(
       targetDir,
       baseFileName,

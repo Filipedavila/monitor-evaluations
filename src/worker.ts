@@ -25,6 +25,7 @@ import {
   createEvaluationPublicProcessor,
   attachEvaluationPublicWorkerEvents,
 } from './evaluation/queue/workers/evaluation-public.worker';
+import { EvaluationS3StorageStrategy } from './evaluation/strategies/storage/evaluation-s3-aws-storage.strategy';
 
 const logger = createLogger('Bootstrap');
 
@@ -46,9 +47,7 @@ async function bootstrap() {
   const evaluationProducer = new EvaluationProducer(redis);
   const evaluationPublishingService = new EvaluationPublishingService(evaluationProducer);
   const evaluationEngine = new QualWebPuppeteerEngine();
-  const evaluationStore = new EvaluationLocalStorageStrategy(
-    createLogger('EvaluationLocalStorageStrategy'),
-  );
+  const evaluationStore = new EvaluationS3StorageStrategy(createLogger('EvaluationAwsS3Strategy'));
   await evaluationStore.init();
   const evaluationPersister = new EvaluationDocumentStrategy(
     evaluationRepository,
