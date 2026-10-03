@@ -9,7 +9,8 @@ const envSchema = z.object({
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().default(6379),
   REDIS_PASSWORD: z.string().optional(),
-  REDIS_DB_BUFFER: z.coerce.number().default(1),
+  REDIS_DB_BULL: z.coerce.number().default(0),
+  REDIS_DB_MONITOR: z.coerce.number().default(1),
 
   DB_HOST: z.string(),
   DB_PORT: z.coerce.number().default(3306),
