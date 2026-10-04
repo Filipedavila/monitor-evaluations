@@ -17,6 +17,10 @@ const envSchema = z.object({
   DB_USERNAME: z.string(),
   DB_PASSWORD: z.string(),
   DB_DATABASE: z.string(),
+  AWS_REGION: z.string(),
+  AWS_S3_BUCKET_NAME: z.string(),
+  AWS_ACCESS_KEY_ID: z.string(),
+  AWS_SECRET_ACCESS_KEY: z.string(),
 
   MEMORY_HEAP_LIMIT_MB: z.coerce.number().default(350),
   MEMORY_GUARD_CHECK_INTERVAL_MS: z.coerce.number().default(15000),
