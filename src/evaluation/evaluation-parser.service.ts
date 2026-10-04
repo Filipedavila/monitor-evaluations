@@ -33,6 +33,11 @@ export class EvaluationParserService {
 
     try {
       const evaluationProcessed: EvaluationProcessingResult = processEvaluation(rawReport);
+      // clear raw report to free memory
+      rawReport.system = null;
+      rawReport.metadata = null;
+      rawReport.modules = null;
+
       const hash = generateMd5Hash(evaluationProcessed.metadata.metadata.evaluatedAt);
 
       const evaluationReport: AuditReport = {
