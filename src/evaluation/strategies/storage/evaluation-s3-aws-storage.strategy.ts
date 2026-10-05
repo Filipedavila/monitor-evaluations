@@ -13,7 +13,6 @@ import {
   EvaluationStoragePayload,
 } from '../../contracts/evaluation-storage.contract';
 
-import { computeHash } from '../../../common/utils/crypto';
 import { Logger } from '../../../logger/logger';
 
 const asyncGzip = promisify(gzip);
@@ -28,8 +27,6 @@ export class EvaluationFileNotFoundError extends Error {
 interface EvaluationFileKeys {
   htmlKey: string;
   nodesKey: string;
-  hashKey: string;
-  htmlHashKey: string;
 }
 
 export class EvaluationS3StorageStrategy implements EvaluationStorage {
@@ -39,8 +36,6 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
 
   private readonly HTML_FILE_COMPRESSED_SUFFIX = '.html.gz';
   private readonly NODES_FILE_COMPRESSED_SUFFIX = '_nodes.json.gz';
-  private readonly HTML_FILE_HASH_SUFFIX = '.html.sha256';
-  private readonly HASH_FILE_SUFFIX = '_nodes.json.sha256';
 
   constructor(private readonly logger: Logger) {
     this.bucketName = process.env.AWS_S3_BUCKET_NAME || '';
@@ -72,8 +67,6 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
     return {
       htmlKey: `${targetDir}/${baseFileName}${this.HTML_FILE_COMPRESSED_SUFFIX}`,
       nodesKey: `${targetDir}/${baseFileName}${this.NODES_FILE_COMPRESSED_SUFFIX}`,
-      hashKey: `${targetDir}/${baseFileName}${this.HASH_FILE_SUFFIX}`,
-      htmlHashKey: `${targetDir}/${baseFileName}${this.HTML_FILE_HASH_SUFFIX}`,
     };
   }
 
@@ -97,12 +90,6 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
     }
   }
 
-  private generateFileHash(data: string, evalIdentifier: EvaluationIdentifier): string {
-    return computeHash(
-      data + evalIdentifier.evaluationDate + evalIdentifier.websiteId + evalIdentifier.pageId,
-    );
-  }
-
   /**
    * Remove uma chave do S3 de forma idempotente, ignorando se não existir.
    */
@@ -122,17 +109,15 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
 
   async save(payload: EvaluationStoragePayload): Promise<void> {
     const { targetDir, baseFileName } = this.buildSafePaths(payload.evalIdentifier);
-    const { htmlKey, nodesKey, hashKey, htmlHashKey } = this.buildFileKeys(targetDir, baseFileName);
+    const { htmlKey, nodesKey } = this.buildFileKeys(targetDir, baseFileName);
     this.logger.log(
       `[S3Storage] Attempting to save evaluation ID: ${payload.evalIdentifier.evaluationId} to S3 bucket: ${this.bucketName}`,
     );
-    const htmlHash = this.generateFileHash(payload.htmlContent, payload.evalIdentifier);
-    const nodesHash = this.generateFileHash(JSON.stringify(payload.nodes), payload.evalIdentifier);
 
     try {
       const [htmlGzipped, nodesGzipped] = await Promise.all([
         asyncGzip(Buffer.from(payload.htmlContent, 'utf8')),
-        asyncGzip(Buffer.from(JSON.stringify(payload.nodes), 'utf8')),
+        asyncGzip(Buffer.from(payload.nodes, 'utf8')),
       ]);
 
       await Promise.all([
@@ -154,30 +139,9 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
             ContentEncoding: 'gzip',
           }),
         ),
-        this.s3Client.send(
-          new PutObjectCommand({
-            Bucket: this.bucketName,
-            Key: hashKey,
-            Body: nodesHash,
-            ContentType: 'text/plain',
-          }),
-        ),
-        this.s3Client.send(
-          new PutObjectCommand({
-            Bucket: this.bucketName,
-            Key: htmlHashKey,
-            Body: htmlHash,
-            ContentType: 'text/plain',
-          }),
-        ),
       ]);
     } catch (error) {
-      await Promise.all([
-        this.safeDeleteKey(htmlKey),
-        this.safeDeleteKey(nodesKey),
-        this.safeDeleteKey(hashKey),
-        this.safeDeleteKey(htmlHashKey),
-      ]);
+      await Promise.all([this.safeDeleteKey(htmlKey), this.safeDeleteKey(nodesKey)]);
 
       this.logger.error(
         `Failed to save evaluation files to S3 for ID: ${payload.evalIdentifier.evaluationId}`,
@@ -248,14 +212,14 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
 
   async delete(evaluationIdentifier: EvaluationIdentifier): Promise<void> {
     const { targetDir, baseFileName } = this.buildSafePaths(evaluationIdentifier);
-    const { htmlKey, nodesKey, hashKey, htmlHashKey } = this.buildFileKeys(targetDir, baseFileName);
+    const { htmlKey, nodesKey } = this.buildFileKeys(targetDir, baseFileName);
 
     try {
       await this.s3Client.send(
         new DeleteObjectsCommand({
           Bucket: this.bucketName,
           Delete: {
-            Objects: [{ Key: htmlKey }, { Key: nodesKey }, { Key: hashKey }, { Key: htmlHashKey }],
+            Objects: [{ Key: htmlKey }, { Key: nodesKey }],
             Quiet: true,
           },
         }),
