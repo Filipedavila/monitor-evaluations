@@ -106,7 +106,6 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
       this.logger.warn(`Failed to safely delete S3 key: ${key}. Reason: ${errorMessage}`);
     }
   }
-
   async save(payload: EvaluationStoragePayload): Promise<void> {
     const { targetDir, baseFileName } = this.buildSafePaths(payload.evalIdentifier);
     const { htmlKey, nodesKey } = this.buildFileKeys(targetDir, baseFileName);
@@ -115,9 +114,21 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
     );
 
     try {
+      const htmlString =
+        typeof payload.htmlContent === 'string'
+          ? payload.htmlContent
+          : JSON.stringify(payload.htmlContent);
+
+      const nodesString =
+        typeof payload.nodes === 'string' ? payload.nodes : JSON.stringify(payload.nodes);
+
+      if (!htmlString || !nodesString) {
+        throw new Error(`Payload inválido para S3: htmlContent ou nodes estão vazios.`);
+      }
+
       const [htmlGzipped, nodesGzipped] = await Promise.all([
-        asyncGzip(Buffer.from(payload.htmlContent, 'utf8')),
-        asyncGzip(Buffer.from(payload.nodes, 'utf8')),
+        asyncGzip(Buffer.from(htmlString, 'utf8')),
+        asyncGzip(Buffer.from(nodesString, 'utf8')),
       ]);
 
       await Promise.all([
