@@ -15,7 +15,6 @@ import { EvaluationParserService } from './evaluation/evaluation-parser.service'
 import { EvaluationPublishingService } from './evaluation/evaluation-publish.service';
 import { EvaluationProducer } from './evaluation/redis/evaluation.producer';
 import { QualWebPuppeteerEngine } from './evaluation/strategies/engines/evaluation-engine-puppeteer.strategy';
-import { EvaluationLocalStorageStrategy } from './evaluation/strategies/storage/evaluation-local-storage.strategy';
 import { EvaluationDocumentStrategy } from './evaluation/strategies/reporting/evaluation-document.strategy';
 import {
   createEvaluationPrivateProcessor,

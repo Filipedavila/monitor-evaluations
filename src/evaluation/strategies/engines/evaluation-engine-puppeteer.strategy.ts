@@ -1,4 +1,5 @@
-import { QualWeb, QualwebOptions } from '@qualweb/core';
+import { QualWeb, QualwebOptions, PuppeteerFingerprintDriver } from '@qualweb/core';
+
 import { ACTRules } from '@qualweb/act-rules';
 import { WCAGTechniques } from '@qualweb/wcag-techniques';
 import { BestPractices } from '@qualweb/best-practices';
@@ -7,6 +8,9 @@ import { z } from 'zod';
 import { EvaluationEngine } from '../../contracts/evaluation-engine.contract';
 import { createLogger } from '../../../logger/logger';
 
+const driver = new PuppeteerFingerprintDriver({
+  launchOptions: { headless: true, args: ['--disable-blink-features=AutomationControlled'] },
+});
 const QUALWEB_START_TIMEOUT = 30_000;
 
 const USER_AGENT =
@@ -23,7 +27,7 @@ const BROWSER_ARGS = [
   '--disable-blink-features=AutomationControlled',
   '--disable-extensions',
   '--no-zygote',
-  '--js-flags=--max-old-space-size=512', 
+  '--js-flags=--max-old-space-size=512',
   `--user-agent=${USER_AGENT}`,
   `--lang=${LANGUAGE}`,
 ];
@@ -85,10 +89,7 @@ export class QualWebPuppeteerEngine implements EvaluationEngine {
 
     const targetUrl = parseResult.data;
 
-    const qualweb = new QualWeb({
-      adBlock: true,
-      stealth: true,
-    });
+    const qualweb = new QualWeb(undefined, driver);
 
     try {
       await qualweb.start(
