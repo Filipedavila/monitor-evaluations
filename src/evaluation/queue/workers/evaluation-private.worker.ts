@@ -1,4 +1,5 @@
 import { Job, Queue, Worker } from 'bullmq';
+import { context, propagation, trace } from '@opentelemetry/api';
 import { DataSource } from 'typeorm';
 import { EvaluationEngine } from '../../contracts/evaluation-engine.contract';
 import { EvaluationStorage } from '../../contracts/evaluation-storage.contract';
@@ -28,6 +29,7 @@ export interface EvaluationPrivateWorkerDeps {
 
 export function createEvaluationPrivateProcessor(deps: EvaluationPrivateWorkerDeps) {
   const logger = createLogger('EvaluationPrivateWorker');
+  const tracer = trace.getTracer('evaluation-private-worker');
 
   async function executeCompensations(compensations: CompensationAction[]): Promise<void> {
     while (compensations.length > 0) {
@@ -86,130 +88,154 @@ export function createEvaluationPrivateProcessor(deps: EvaluationPrivateWorkerDe
   }
 
   return async function process(job: Job<EvaluationJobData, void, string>): Promise<void> {
-    const { institutionId, evaluationId, directoryIds, websiteId, pageId, url } = job.data;
-    let evaluationIdJob = evaluationId;
+    const otelContext = job.data.__otelContext;
+    const extractedContext = otelContext
+      ? propagation.extract(context.active(), otelContext)
+      : context.active();
 
-    const compensations: CompensationAction[] = [];
-
-    try {
-      // 1. Executa avaliação e regras
-      const rawReport = await deps.evaluationEngine.evaluate(url);
-      if (!rawReport) throw Error('Evaluation Engine returned no result');
-
-      await job.updateProgress(30);
-
-      // 2. Normaliza o relatório e extrai as entidades de domínio
-      const { evaluationReport, evaluationData } =
-        deps.evaluationParser.parseEvaluation(rawReport);
-      const evaluationDate = evaluationReport.metadata.evaluatedAt;
-
-      // 3. Persistência relacional inicial
-      if (!evaluationIdJob) {
-        const evaluation = new Evaluation();
-        evaluation.evaluationDate = new Date(evaluationDate);
-        evaluation.pageId = pageId;
-
-        const created = await deps.evaluationRepository.createEvaluation(evaluation, CONTEXT_ID);
-        evaluationIdJob = created.id;
-
-        compensations.push(async () => {
-          logger.warn(`Compensação: A apagar evaluation ${evaluationIdJob} da BD...`);
-          await deps.evaluationRepository.delete(evaluationIdJob!);
+    return await context.with(extractedContext, async () => {
+      return await tracer.startActiveSpan('evaluation-worker-process', async (span) => {
+        span.setAttributes({
+          'bullmq.job.id': job.id || 'unknown',
+          'evaluation.page_id': job.data.pageId,
+          'evaluation.institution_id': job.data.institutionId,
         });
 
-        await job.updateData({
-          ...job.data,
-          evaluationId: evaluationIdJob,
-        });
-      }
+        const { institutionId, evaluationId, directoryIds, websiteId, pageId, url } = job.data;
+        let evaluationIdJob = evaluationId;
+        const compensations: CompensationAction[] = [];
 
-      // 4. Métricas de ingestão
-      const ingestionMetrics = deps.evaluationParser.parseIngestionMetrics(
-        evaluationIdJob,
-        directoryIds,
-        institutionId,
-        websiteId,
-        pageId,
-        evaluationReport.scoring.score,
-        evaluationDate,
-        evaluationReport.scoring.rulesOccurrences,
-      );
+        try {
+          // 1. Executa avaliação e regras
+          const rawReport = await deps.evaluationEngine.evaluate(url);
+          if (!rawReport) throw Error('Evaluation Engine returned no result');
 
-      if (!ingestionMetrics) throw Error('Evaluation Parser returned no ingestion metrics');
-      await job.updateProgress(60);
+          await job.updateProgress(30);
 
-      const storageEvaluationDate = new Date(evaluationDate).toISOString().slice(0, 10);
+          // 2. Normaliza o relatório e extrai as entidades de domínio
+          const { evaluationReport, evaluationData } =
+            deps.evaluationParser.parseEvaluation(rawReport);
+          const evaluationDate = evaluationReport.metadata.evaluatedAt;
 
-      // 5. Envia os artefactos da avaliação (HTML + evidências) para o storage
-      await deps.evaluationStore.save({
-        htmlContent: evaluationReport.snapshot.html,
-        nodes: evaluationReport.scoring.assertionEvidence,
-        evalIdentifier: {
-          evaluationId: evaluationIdJob,
-          websiteId,
-          pageId,
-          evaluationDate: storageEvaluationDate,
-        },
+          // 3. Persistência relacional inicial
+          if (!evaluationIdJob) {
+            const evaluation = new Evaluation();
+            evaluation.evaluationDate = new Date(evaluationDate);
+            evaluation.pageId = pageId;
+
+            const created = await deps.evaluationRepository.createEvaluation(
+              evaluation,
+              CONTEXT_ID,
+            );
+            evaluationIdJob = created.id;
+
+            compensations.push(async () => {
+              logger.warn(`Compensação: A apagar evaluation ${evaluationIdJob} da BD...`);
+              await deps.evaluationRepository.delete(evaluationIdJob!);
+            });
+
+            await job.updateData({
+              ...job.data,
+              evaluationId: evaluationIdJob,
+            });
+          }
+
+          // 4. Métricas de ingestão
+          const ingestionMetrics = deps.evaluationParser.parseIngestionMetrics(
+            evaluationIdJob,
+            directoryIds,
+            institutionId,
+            websiteId,
+            pageId,
+            evaluationReport.scoring.score,
+            evaluationDate,
+            evaluationReport.scoring.rulesOccurrences,
+          );
+
+          if (!ingestionMetrics) throw Error('Evaluation Parser returned no ingestion metrics');
+          await job.updateProgress(60);
+
+          const storageEvaluationDate = new Date(evaluationDate).toISOString().slice(0, 10);
+
+          // 5. Envia os artefactos da avaliação (HTML + evidências) para o storage
+          await deps.evaluationStore.save({
+            htmlContent: evaluationReport.snapshot.html,
+            nodes: evaluationReport.scoring.assertionEvidence,
+            evalIdentifier: {
+              evaluationId: evaluationIdJob,
+              websiteId,
+              pageId,
+              evaluationDate: storageEvaluationDate,
+            },
+          });
+
+          compensations.push(async () => {
+            logger.warn(
+              `Compensação: A apagar ficheiros do storage para evaluation ${evaluationIdJob}...`,
+            );
+            await deps.evaluationStore.delete({
+              evaluationId: evaluationIdJob!,
+              websiteId,
+              pageId,
+              evaluationDate: storageEvaluationDate,
+            });
+          });
+
+          await job.updateProgress(80);
+
+          // 6. Persistência de métricas agregadas (ClickHouse / OLAP)
+          await deps.evaluationPersister.persist({
+            evaluationId: evaluationIdJob,
+            websiteId,
+            directoryId: directoryIds[0],
+            pageId,
+            institutionId,
+            evaluationMetrics: ingestionMetrics,
+            basicResult: evaluationData,
+            contextId: CONTEXT_ID,
+          });
+
+          // 7. Atualização do status da página
+          await deps.dataSource.query(
+            `
+            UPDATE page_contexts_ams
+            SET page_status = $1
+            WHERE page_id = $2;
+            `,
+            [PageStatus.EVALUATED, pageId],
+          );
+
+          await job.updateProgress(100);
+          job.log('Evaluation Resolution Ended');
+
+          deps.eventBus.emit('evaluation.completed', {
+            ...job.data,
+            evaluationId: evaluationIdJob,
+          });
+
+          span.setStatus({ code: 1 }); // OK
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          logger.error(`Erro no job ${job.id} (Página ${pageId}): ${err.message}`, err.stack);
+
+          span.recordException(err);
+          span.setStatus({ code: 2, message: err.message }); // ERROR
+
+          const maxAttempts = job.opts.attempts ?? 1;
+          const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
+
+          await executeCompensations(compensations);
+
+          if (isFinalAttempt) {
+            await handleFinalFailure(job, err);
+          }
+
+          throw err;
+        } finally {
+          span.end();
+        }
       });
-
-      compensations.push(async () => {
-        logger.warn(
-          `Compensação: A apagar ficheiros do storage para evaluation ${evaluationIdJob}...`,
-        );
-        await deps.evaluationStore.delete({
-          evaluationId: evaluationIdJob!,
-          websiteId,
-          pageId,
-          evaluationDate: storageEvaluationDate,
-        });
-      });
-
-      await job.updateProgress(80);
-
-      // 6. Persistência de métricas agregadas (ClickHouse / OLAP)
-      await deps.evaluationPersister.persist({
-        evaluationId: evaluationIdJob,
-        websiteId,
-        directoryId: directoryIds[0],
-        pageId,
-        institutionId,
-        evaluationMetrics: ingestionMetrics,
-        basicResult: evaluationData,
-        contextId: CONTEXT_ID,
-      });
-
-      // 7. Atualização do status da página
-      await deps.dataSource.query(
-        `
-        UPDATE page_contexts_ams
-        SET page_status = $1
-        WHERE page_id = $2;
-        `,
-        [PageStatus.EVALUATED, pageId],
-      );
-
-      await job.updateProgress(100);
-      job.log('Evaluation Resolution Ended');
-
-      deps.eventBus.emit('evaluation.completed', {
-        ...job.data,
-        evaluationId: evaluationIdJob,
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      logger.error(`Erro no job ${job.id} (Página ${pageId}): ${err.message}`, err.stack);
-
-      const maxAttempts = job.opts.attempts ?? 1;
-      const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
-
-      await executeCompensations(compensations);
-
-      if (isFinalAttempt) {
-        await handleFinalFailure(job, err);
-      }
-
-      throw err;
-    }
+    });
   };
 }
 

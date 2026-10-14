@@ -37,7 +37,9 @@ export interface AdditionalMetadata {
   directoryIds: number[];
 }
 
-export interface EvaluationJobData extends EvaluationMeta, PageMetadata, AdditionalMetadata {}
+export interface EvaluationJobData extends EvaluationMeta, PageMetadata, AdditionalMetadata {
+  __otelContext?: Record<string, unknown>;
+}
 
 export interface SafePaths {
   targetDir: string;

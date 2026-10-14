@@ -1,4 +1,5 @@
 import { Job, Queue, Worker } from 'bullmq';
+import { context, propagation, trace } from '@opentelemetry/api';
 import { DataSource } from 'typeorm';
 import { Evaluation, PublishStatus } from '../../entities/evaluation.entity';
 import { EvaluationEngine } from '../../contracts/evaluation-engine.contract';
@@ -26,6 +27,7 @@ export interface EvaluationPublicWorkerDeps {
 
 export function createEvaluationPublicProcessor(deps: EvaluationPublicWorkerDeps) {
   const logger = createLogger('EvaluationPublicWorker');
+  const tracer = trace.getTracer('evaluation-public-worker');
 
   async function executeCompensations(compensations: CompensationAction[]): Promise<void> {
     while (compensations.length > 0) {
@@ -75,111 +77,133 @@ export function createEvaluationPublicProcessor(deps: EvaluationPublicWorkerDeps
     } catch (cleanupError) {
       const cleanupErrorMessage =
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      logger.error(
-        `Failed to execute cleanup logic for job ${job.id}: ${cleanupErrorMessage}`,
-      );
+      logger.error(`Failed to execute cleanup logic for job ${job.id}: ${cleanupErrorMessage}`);
     }
   }
 
   return async function process(job: Job<EvaluationJobData, void, string>): Promise<void> {
-    const { websiteId, evaluationId, pageId, url } = job.data;
-    let evaluationIdJob = evaluationId;
+    const otelContext = job.data.__otelContext;
+    const extractedContext = otelContext
+      ? propagation.extract(context.active(), otelContext)
+      : context.active();
 
-    const compensations: CompensationAction[] = [];
-
-    try {
-      const evaluationResult = await deps.evaluationEngine.evaluate(url);
-      if (!evaluationResult) throw new Error('Evaluation Engine returned no result');
-
-      await job.updateProgress(50);
-      job.log('Received Evaluation from Engine');
-
-      const { evaluationReport, evaluationData } =
-        deps.evaluationParser.parseEvaluation(evaluationResult);
-      const evaluationDate = evaluationReport.metadata.evaluatedAt;
-
-      if (!evaluationIdJob) {
-        const evaluation = new Evaluation();
-        evaluation.evaluationDate = new Date(evaluationDate);
-        evaluation.pageId = pageId;
-
-        const created = await deps.evaluationRepository.createEvaluation(evaluation, CONTEXT_ID);
-        evaluationIdJob = created.id;
-
-        compensations.push(async () => {
-          logger.warn(`Compensação: A remover evaluation ${evaluationIdJob} da BD...`);
-          await deps.evaluationRepository.delete(evaluationIdJob!);
+    return await context.with(extractedContext, async () => {
+      return await tracer.startActiveSpan('evaluation-public-worker-process', async (span) => {
+        span.setAttributes({
+          'bullmq.job.id': job.id || 'unknown',
+          'evaluation.page_id': job.data.pageId,
+          'evaluation.website_id': job.data.websiteId,
         });
 
-        await job.updateData({
-          ...job.data,
-          evaluationId: evaluationIdJob,
-        });
-      }
+        const { websiteId, evaluationId, pageId, url } = job.data;
+        let evaluationIdJob = evaluationId;
+        const compensations: CompensationAction[] = [];
 
-      const storageEvaluationDate = new Date(evaluationDate).toISOString().slice(0, 10);
+        try {
+          const evaluationResult = await deps.evaluationEngine.evaluate(url);
+          if (!evaluationResult) throw new Error('Evaluation Engine returned no result');
 
-      await deps.evaluationStore.save({
-        htmlContent: evaluationReport.snapshot.html,
-        nodes: evaluationReport.scoring.assertionEvidence,
-        evalIdentifier: {
-          evaluationId: evaluationIdJob,
-          websiteId,
-          pageId,
-          evaluationDate: storageEvaluationDate,
-        },
+          await job.updateProgress(50);
+          job.log('Received Evaluation from Engine');
+
+          const { evaluationReport, evaluationData } =
+            deps.evaluationParser.parseEvaluation(evaluationResult);
+          const evaluationDate = evaluationReport.metadata.evaluatedAt;
+
+          if (!evaluationIdJob) {
+            const evaluation = new Evaluation();
+            evaluation.evaluationDate = new Date(evaluationDate);
+            evaluation.pageId = pageId;
+
+            const created = await deps.evaluationRepository.createEvaluation(
+              evaluation,
+              CONTEXT_ID,
+            );
+            evaluationIdJob = created.id;
+
+            compensations.push(async () => {
+              logger.warn(`Compensação: A remover evaluation ${evaluationIdJob} da BD...`);
+              await deps.evaluationRepository.delete(evaluationIdJob!);
+            });
+
+            await job.updateData({
+              ...job.data,
+              evaluationId: evaluationIdJob,
+            });
+          }
+
+          const storageEvaluationDate = new Date(evaluationDate).toISOString().slice(0, 10);
+
+          await deps.evaluationStore.save({
+            htmlContent: evaluationReport.snapshot.html,
+            nodes: evaluationReport.scoring.assertionEvidence,
+            evalIdentifier: {
+              evaluationId: evaluationIdJob,
+              websiteId,
+              pageId,
+              evaluationDate: storageEvaluationDate,
+            },
+          });
+
+          // Regista a compensação para o Storage
+          compensations.push(async () => {
+            logger.warn(
+              `Compensação: A remover ficheiros do storage para evaluation ${evaluationIdJob}...`,
+            );
+            await deps.evaluationStore.delete({
+              evaluationId: evaluationIdJob!,
+              websiteId,
+              pageId,
+              evaluationDate: storageEvaluationDate,
+            });
+          });
+
+          job.log('Saved compressed files in Storage');
+          await job.updateProgress(70);
+
+          await deps.evaluationRepository.updateEntityFromRawData(evaluationIdJob, evaluationData);
+          await deps.evaluationRepository.updateStatus(evaluationIdJob, PublishStatus.STAGED);
+
+          await deps.dataSource.query(
+            `
+            UPDATE page_contexts_monitor
+            SET page_status = $1
+            WHERE page_id = $2;
+            `,
+            [PageStatus.EVALUATED, pageId],
+          );
+
+          await job.updateProgress(100);
+          job.log('Evaluation Resolution Ended');
+
+          deps.eventBus.emit('evaluation.completed', {
+            ...job.data,
+            evaluationId: evaluationIdJob,
+          });
+
+          span.setStatus({ code: 1 }); // OK
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          logger.error(`Erro no job ${job.id} (Página ${pageId}): ${err.message}`, err.stack);
+
+          span.recordException(err);
+          span.setStatus({ code: 2, message: err.message }); // ERROR
+
+          const maxAttempts = job.opts.attempts ?? 1;
+          const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
+
+          await executeCompensations(compensations);
+
+          if (isFinalAttempt) {
+            await handleFinalFailure(job, err);
+          }
+
+          throw err;
+        } finally {
+          span.end();
+        }
       });
-
-      // Regista a compensação para o Storage
-      compensations.push(async () => {
-        logger.warn(
-          `Compensação: A remover ficheiros do storage para evaluation ${evaluationIdJob}...`,
-        );
-        await deps.evaluationStore.delete({
-          evaluationId: evaluationIdJob!,
-          websiteId,
-          pageId,
-          evaluationDate: storageEvaluationDate,
-        });
-      });
-
-      job.log('Saved compressed files in Storage');
-      await job.updateProgress(70);
-
-      await deps.evaluationRepository.updateEntityFromRawData(evaluationIdJob, evaluationData);
-      await deps.evaluationRepository.updateStatus(evaluationIdJob, PublishStatus.STAGED);
-
-      await deps.dataSource.query(
-        `
-        UPDATE page_contexts_monitor
-        SET page_status = $1
-        WHERE page_id = $2;
-        `,
-        [PageStatus.EVALUATED, pageId],
-      );
-
-      await job.updateProgress(100);
-      job.log('Evaluation Resolution Ended');
-
-      deps.eventBus.emit('evaluation.completed', {
-        ...job.data,
-        evaluationId: evaluationIdJob,
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      logger.error(`Erro no job ${job.id} (Página ${pageId}): ${err.message}`, err.stack);
-
-      const maxAttempts = job.opts.attempts ?? 1;
-      const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
-
-      await executeCompensations(compensations);
-
-      if (isFinalAttempt) {
-        await handleFinalFailure(job, err);
-      }
-
-      throw err;
-    }
+    });
   };
 }
 
