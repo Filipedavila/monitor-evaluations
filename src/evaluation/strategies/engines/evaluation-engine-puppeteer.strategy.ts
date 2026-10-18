@@ -9,7 +9,12 @@ import { EvaluationEngine } from '../../contracts/evaluation-engine.contract';
 import { createLogger } from '../../../logger/logger';
 
 const driver = new PuppeteerFingerprintDriver({
-  launchOptions: { headless: true, args: ['--disable-blink-features=AutomationControlled'] },
+  useCluster: false,
+  launchOptions: {
+    headless: true,
+    args: ['--disable-blink-features=AutomationControlled'],
+    browserWSEndpoint: 'ws://localhost:49999',
+  },
 });
 const QUALWEB_START_TIMEOUT = 30_000;
 
