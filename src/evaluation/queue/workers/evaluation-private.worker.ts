@@ -116,19 +116,18 @@ export function createEvaluationPrivateProcessor(deps: EvaluationPrivateWorkerDe
           const { evaluationReport, evaluationData } =
             deps.evaluationParser.parseEvaluation(rawReport);
           const evaluationDate = evaluationReport.metadata.evaluatedAt;
+          const evaluation = new Evaluation();
+          evaluation.evaluationDate = new Date(evaluationDate);
+          evaluation.pageId = pageId;
 
-          // 3. Persistência relacional inicial
-          if (!evaluationIdJob) {
-            const evaluation = new Evaluation();
-            evaluation.evaluationDate = new Date(evaluationDate);
-            evaluation.pageId = pageId;
+          if (evaluationIdJob) {
+            evaluation.id = evaluationIdJob;
+          }
 
-            const created = await deps.evaluationRepository.createEvaluation(
-              evaluation,
-              CONTEXT_ID,
-            );
-            evaluationIdJob = created.id;
+          const created = await deps.evaluationRepository.createEvaluation(evaluation, CONTEXT_ID);
+          evaluationIdJob = created.id;
 
+          if (!job.data.evaluationId) {
             compensations.push(async () => {
               logger.warn(`Compensação: A apagar evaluation ${evaluationIdJob} da BD...`);
               await deps.evaluationRepository.delete(evaluationIdJob!);

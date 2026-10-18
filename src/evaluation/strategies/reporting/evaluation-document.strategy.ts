@@ -1,4 +1,3 @@
-import { PublishStatus } from '../../entities/evaluation.entity';
 import {
   EvaluationPersister,
   EvaluationPersisterPayload,
@@ -37,7 +36,6 @@ export class EvaluationDocumentStrategy implements EvaluationPersister {
             AA: basicResult.AA,
             AAA: basicResult.AAA,
             evaluationDate: new Date(basicResult.createdAt),
-            status: PublishStatus.STAGED,
             score: basicResult.score,
             tagCount: basicResult.tagCount,
           },

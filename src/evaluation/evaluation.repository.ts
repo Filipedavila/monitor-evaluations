@@ -1,8 +1,7 @@
 import { DataSource, QueryRunner, Repository } from 'typeorm';
-import { Evaluation, PublishStatus } from './entities/evaluation.entity';
+import { Evaluation } from './entities/evaluation.entity';
 import { EvaluationContext } from './entities/contexts-evaluation.entity';
 import { EvaluationScoring } from './types';
-
 export class EvaluationNotFoundError extends Error {
   constructor(evaluationId: number) {
     super(`Evaluation with ID ${evaluationId} not found`);
@@ -73,9 +72,3 @@ export class EvaluationRepository {
     return await this.ormRepo.save(evaluation);
   }
 
-  async updateStatus(evaluationId: number, status: PublishStatus): Promise<Evaluation> {
-    const evaluation = await this.findByIdOrFail(evaluationId);
-    evaluation.status = status;
-    return await this.ormRepo.save(evaluation);
-  }
-}

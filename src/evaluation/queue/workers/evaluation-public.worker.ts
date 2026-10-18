@@ -1,7 +1,7 @@
 import { Job, Queue, Worker } from 'bullmq';
 import { context, propagation, trace } from '@opentelemetry/api';
 import { DataSource } from 'typeorm';
-import { Evaluation, PublishStatus } from '../../entities/evaluation.entity';
+import { Evaluation } from '../../entities/evaluation.entity';
 import { EvaluationEngine } from '../../contracts/evaluation-engine.contract';
 import { EvaluationStorage } from '../../contracts/evaluation-storage.contract';
 import { EvaluationParserService } from '../../evaluation-parser.service';
@@ -162,7 +162,6 @@ export function createEvaluationPublicProcessor(deps: EvaluationPublicWorkerDeps
           await job.updateProgress(70);
 
           await deps.evaluationRepository.updateEntityFromRawData(evaluationIdJob, evaluationData);
-          await deps.evaluationRepository.updateStatus(evaluationIdJob, PublishStatus.STAGED);
 
           await deps.dataSource.query(
             `

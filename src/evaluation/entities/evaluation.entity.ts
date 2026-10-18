@@ -13,11 +13,6 @@ import {
 } from 'typeorm';
 import { Page } from '../../domains/inventory/page/page.entity';
 
-export enum PublishStatus {
-  STAGED = 'STAGED',
-  PUBLISHED = 'PUBLISHED',
-}
-
 @Entity('evaluations')
 @Index('idx_evaluations_page_created', ['pageId', 'createdAt'])
 export class Evaluation implements IdentifiableModel, Auditable {
@@ -76,15 +71,6 @@ export class Evaluation implements IdentifiableModel, Auditable {
     nullable: true,
   })
   tagCount: number;
-
-  @Column({
-    name: 'status',
-    type: 'enum',
-    enumName: 'evaluations_publish_status_enum',
-    enum: PublishStatus,
-    default: PublishStatus.STAGED,
-  })
-  status: PublishStatus;
 
   @Column({
     name: 'evaluation_date',
