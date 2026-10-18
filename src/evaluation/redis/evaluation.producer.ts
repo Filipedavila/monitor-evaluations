@@ -3,38 +3,31 @@ import { REDIS_STREAMS } from '../../redis/types';
 import { IMetricData } from '../types';
 
 export class EvaluationProducer {
+  private static readonly STREAM_MAX_LEN = 50000;
+  private static readonly PRODUCER_ID = 'eval-producer-node-1';
+
   constructor(private readonly redis: Redis) {}
 
-  // TODO: define type for result
-  async publishEvaluation(result: any) {
-    const resultId = await this.redis.xadd(
-      REDIS_STREAMS.ANALYTICS_EVALUATION_BUFFER,
-      // TODO: define unique id strategy for idempotency
-      '*',
-      'url', result.url,
-      'score', String(result.score),
-      'timestamp', new Date().toISOString(),
-    );
-    if (!resultId) {
-      throw new Error('Failed to publish evaluation result');
-    }
-    return resultId;
-  }
+  async publishEvaluations(results: IMetricData[]): Promise<string | null> {
+    if (results.length === 0) return null;
 
-  async publishEvaluations(results: IMetricData[]) {
-    const resultIds: string[] = [];
-    for (const result of results) {
-      const resultId = await this.redis.xadd(
-        REDIS_STREAMS.ANALYTICS_EVALUATION_BUFFER,
-        // TODO: define unique id strategy for idempotency
-        '*',
-        'data', JSON.stringify(result)
-      );
-      if (!resultId) {
-        throw new Error('Failed to publish evaluation result');
-      }
-      resultIds.push(resultId);
-    }
-    return resultIds;
+    const { evaluation_id, website_id, page_id, evaluation_date } = results[0];
+    const streamKey = REDIS_STREAMS.ANALYTICS_EVALUATION_BUFFER;
+
+    const idempotentId = `${evaluation_id}:${website_id}:${page_id}:${evaluation_date}`;
+
+    const streamId = await this.redis.xadd(
+      streamKey,
+      'MAXLEN',
+      '~',
+      EvaluationProducer.STREAM_MAX_LEN,
+      'IDMP',
+      EvaluationProducer.PRODUCER_ID,
+      idempotentId,
+      '*',
+      'data',
+      JSON.stringify(results),
+    );
+    return streamId;
   }
 }
