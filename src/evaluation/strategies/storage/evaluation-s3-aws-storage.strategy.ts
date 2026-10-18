@@ -9,11 +9,16 @@ import { promisify } from 'node:util';
 import { ReadStream } from 'node:fs';
 import { EvaluationIdentifier, SafePaths, EvaluationFileType } from '../../types';
 import {
+  ArtifactType,
+  EvaluationArtifact,
+} from 'src/evaluation/entities/evaluation-artifacts.entity';
+import {
   EvaluationStorage,
   EvaluationStoragePayload,
 } from '../../contracts/evaluation-storage.contract';
 
 import { Logger } from '../../../logger/logger';
+import { In, Repository } from 'typeorm';
 
 const asyncGzip = promisify(gzip);
 
@@ -37,7 +42,10 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
   private readonly HTML_FILE_COMPRESSED_SUFFIX = '.html.gz';
   private readonly NODES_FILE_COMPRESSED_SUFFIX = '_nodes.json.gz';
 
-  constructor(private readonly logger: Logger) {
+  constructor(
+    private readonly logger: Logger,
+    private readonly artifactRepository: Repository<EvaluationArtifact>,
+  ) {
     this.bucketName = process.env.AWS_S3_BUCKET_NAME || '';
     if (!this.bucketName) {
       this.logger.warn('AWS_S3_BUCKET_NAME is not defined in environment variables.');
@@ -89,7 +97,9 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
       );
     }
   }
-
+  private mapToArtifactType(fileType: EvaluationFileType): ArtifactType {
+    return fileType === 'html' ? 'html' : 'assertions';
+  }
   /**
    * Remove uma chave do S3 de forma idempotente, ignorando se não existir.
    */
@@ -130,8 +140,8 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
         asyncGzip(Buffer.from(htmlString, 'utf8')),
         asyncGzip(Buffer.from(nodesString, 'utf8')),
       ]);
-
-      await Promise.all([
+      // 1. Upload paralelo para o S3 (guardamos a resposta para obter o ETag)
+      const [htmlRes, nodesRes] = await Promise.all([
         this.s3Client.send(
           new PutObjectCommand({
             Bucket: this.bucketName,
@@ -151,6 +161,32 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
           }),
         ),
       ]);
+
+      // 2. Upsert atómico no PostgreSQL incluindo storageKey e ETag
+      await this.artifactRepository.upsert(
+        [
+          {
+            evaluationId: payload.evalIdentifier.evaluationId,
+            artifactType: 'html',
+            storageKey: htmlKey,
+            fileSize: htmlGzipped.byteLength,
+            mimeType: 'text/html',
+            ETag: htmlRes.ETag?.replace(/"/g, ''),
+          },
+          {
+            evaluationId: payload.evalIdentifier.evaluationId,
+            artifactType: 'assertions',
+            storageKey: nodesKey,
+            fileSize: nodesGzipped.byteLength,
+            mimeType: 'application/json',
+            ETag: nodesRes.ETag?.replace(/"/g, ''),
+          },
+        ],
+        {
+          conflictPaths: ['evaluationId', 'artifactType'],
+          skipUpdateIfNoValuesChanged: true,
+        },
+      );
     } catch (error) {
       await Promise.all([this.safeDeleteKey(htmlKey), this.safeDeleteKey(nodesKey)]);
 
@@ -166,6 +202,20 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
     evaluationIdentifier: EvaluationIdentifier,
     fileType: EvaluationFileType,
   ): Promise<ReadStream> {
+    const evaluationId = Number(evaluationIdentifier.evaluationId);
+    const artifactType = this.mapToArtifactType(fileType);
+
+    // Evita chamadas HTTP desnecessárias à AWS para artefactos que não existem.
+    const hasArtifact = await this.artifactRepository.existsBy({
+      evaluationId,
+      artifactType,
+    });
+
+    if (!hasArtifact) {
+      throw new EvaluationFileNotFoundError(
+        `Artifact '${artifactType}' not registered in DB for Evaluation ID: ${evaluationId}`,
+      );
+    }
     const { targetDir, baseFileName } = this.buildSafePaths(evaluationIdentifier);
     this.validateFileType(fileType);
     const fullKey = this.getFileKeyForType(targetDir, baseFileName, fileType);
@@ -226,7 +276,7 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
     const { htmlKey, nodesKey } = this.buildFileKeys(targetDir, baseFileName);
 
     try {
-      await this.s3Client.send(
+      const s3Response = await this.s3Client.send(
         new DeleteObjectsCommand({
           Bucket: this.bucketName,
           Delete: {
@@ -235,7 +285,13 @@ export class EvaluationS3StorageStrategy implements EvaluationStorage {
           },
         }),
       );
-
+      if (s3Response.Errors && s3Response.Errors.length > 0) {
+        throw new Error(`S3 partial delete failure: ${JSON.stringify(s3Response.Errors)}`);
+      }
+      await this.artifactRepository.delete({
+        evaluationId: evaluationIdentifier.evaluationId,
+        artifactType: In(['html', 'assertions']),
+      });
       this.logger.log(
         `Evaluation files successfully deleted from S3 for ID: ${evaluationIdentifier.evaluationId}`,
       );

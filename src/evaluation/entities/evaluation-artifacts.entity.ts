@@ -10,6 +10,9 @@ export class EvaluationArtifact {
   @PrimaryColumn({ name: 'artifact_type', type: 'text' })
   artifactType: ArtifactType;
 
+  @Column({ name: 'storage_key', type: 'text', unique: true })
+  storageKey: string;
+
   @Column({ name: 'file_size', type: 'bigint' })
   fileSize: number;
 
@@ -18,6 +21,9 @@ export class EvaluationArtifact {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+
+  @Column({ name: 'etag', type: 'text', nullable: true })
+  ETag: string;
 
   @ManyToOne(() => Evaluation, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'evaluation_id' })

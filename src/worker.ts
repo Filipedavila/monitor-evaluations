@@ -8,7 +8,7 @@ import { createQueueConnection } from './queues/connection';
 import { QUEUE_NAMES } from './queues/queues.config';
 import { createMemoryGuard, MemoryGuard } from './memory-guard/memory-guard';
 import { EvaluationEventBus } from './events/evaluation-events';
-
+import { EvaluationArtifact } from './evaluation/entities/evaluation-artifacts.entity';
 import { Evaluation } from './evaluation/entities/evaluation.entity';
 import { EvaluationRepository } from './evaluation/evaluation.repository';
 import { EvaluationParserService } from './evaluation/evaluation-parser.service';
@@ -43,10 +43,14 @@ async function bootstrap() {
     dataSource.getRepository(Evaluation),
     dataSource,
   );
+  const evaluationArtifactRepository = dataSource.getRepository(EvaluationArtifact);
   const evaluationProducer = new EvaluationProducer(redis);
   const evaluationPublishingService = new EvaluationPublishingService(evaluationProducer);
   const evaluationEngine = new QualWebPuppeteerEngine();
-  const evaluationStore = new EvaluationS3StorageStrategy(createLogger('EvaluationAwsS3Strategy'));
+  const evaluationStore = new EvaluationS3StorageStrategy(
+    createLogger('EvaluationAwsS3Strategy'),
+    evaluationArtifactRepository,
+  );
   await evaluationStore.init();
   const evaluationPersister = new EvaluationDocumentStrategy(
     evaluationRepository,
