@@ -16,17 +16,24 @@
     "strict": true,
     "useDefineForClassFields": false,
     "outDir": "./dist",
-    "incremental": true,
+    "rootDir": "./src",
     "types": ["jest", "node"],
-    "baseUrl": ".",
     "paths": {
-      "src/*": ["./src/*"],
-      "@factories/*": ["./test/factories/*"],
-      "@domains/*": ["src/domains/*"],
+      "@/*": ["./src/*"],
+      "@evaluation/*": ["./src/domains/evaluation/*"],
+      "@infrastructure/*": ["./src/infrastructure/*"],
       "@common/*": ["./src/common/*"],
-      "@core/*": ["./src/core/*"],
+      "@domains/*": ["./src/domains/*"],
+      "@events/*": ["./src/events/*"],
+      "@logger/*": ["./src/infrastructure/logger/*"],
+      "@factories/*": ["./test/factories/*"],
       "test/*": ["./test/*"]
     }
   },
+  "ts-node": {
+    "transpileOnly": true,
+    "require": ["tsconfig-paths/register"]
+  },
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

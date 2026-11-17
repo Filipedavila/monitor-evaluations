@@ -1,21 +1,33 @@
+# Docker
 Dockerfile
 .dockerignore
+docker-compose*.yml
+
+# Migrations
 migration-*
+migration
+
+# Dependencies and build output
 node_modules/
+dist/
+coverage/
+storage/
+*.tsbuildinfo
+
+# Editor / OS / VCS / CI
 .idea
 .vscode
 .git
 .gitignore
-dist/
-migration
-coverage/
-storage/
+.github/
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docs
 README.md
 
 # Environment secrets
-.env
-.env.local
-.env.*.local
-.env.production
-.env.dev
-.env.prod
+.env*

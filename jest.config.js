@@ -1,13 +1,41 @@
-/* global module */
+/* global module, require */
+const path = require('path');
+const { compilerOptions } = require('./tsconfig.json');
+
+function escapeRegex(value) {
+  return value.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getModuleNameMapper(paths) {
+  const mapper = {};
+  for (const [alias, pathsArray] of Object.entries(paths)) {
+    // Escapa caracteres especiais de regex e substitui o wildcard
+    const key = '^' + escapeRegex(alias).replace('*', '(.*)') + '$';
+    // Normaliza o caminho (remove "./") para o jest resolver corretamente
+    const target = '<rootDir>/' + path.posix.normalize(pathsArray[0]).replace('*', '$1');
+    mapper[key] = target;
+  }
+  return mapper;
+}
+
 module.exports = {
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: '.',
+  // Garante que tanto o código fonte como a pasta de testes são analisados pelo Jest
+  roots: ['<rootDir>/src', '<rootDir>/test'],
+  // Diz ao Jest onde procurar módulos base
+  moduleDirectories: ['node_modules', '<rootDir>'],
   testRegex: '.spec.ts$',
+  testPathIgnorePatterns: ['/node_modules/', '\\.integration\\.spec\\.ts$'],
+  moduleNameMapper: {
+    ...getModuleNameMapper(compilerOptions.paths),
+  },
   transform: {
     '^.+\\.(t|j)s$': [
       '@swc/jest',
       {
         jsc: {
+          target: 'es2022',
           parser: {
             syntax: 'typescript',
             decorators: true,
@@ -15,15 +43,6 @@ module.exports = {
           transform: {
             legacyDecorator: true,
             decoratorMetadata: true,
-          },
-          baseUrl: '.',
-          paths: {
-            'src/*': ['./src/*'],
-            'test/*': ['./test/*'],
-            '@factories/*': ['./test/factories/*'],
-            '@domains/*': ['./src/domains/*'],
-            '@common/*': ['./src/common/*'],
-            '@core/*': ['./src/core/*'],
           },
         },
       },
@@ -42,12 +61,4 @@ module.exports = {
   ],
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
-  moduleNameMapper: {
-    '^@factories/(.*)$': '<rootDir>/test/factories/$1',
-    '^@domains/(.*)$': '<rootDir>/src/domains/$1',
-    '^@common/(.*)$': '<rootDir>/src/common/$1',
-    '^@core/(.*)$': '<rootDir>/src/core/$1',
-    '^test/(.*)$': '<rootDir>/test/$1',
-    '^src/(.*)$': '<rootDir>/src/$1',
-  },
 };

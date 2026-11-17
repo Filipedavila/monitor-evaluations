@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { EvaluationJobData } from '../evaluation/types';
+import { EvaluationJobData } from '../domains/evaluation/types';
 
 export interface EvaluationEventMap {
   'evaluation.active': EvaluationJobData;
